@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const crypto = require('crypto');
 
 // 配置文件路径
 const TASK_LOG_PATH = path.join(__dirname, '..', 'memory', 'task-log.json');
@@ -25,6 +26,7 @@ const ENV_PATH = path.join(__dirname, '..', '.env');
 
 // Feishu 配置
 let FEISHU_WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
+let FEISHU_SIGN_KEY = process.env.FEISHU_SIGN_KEY;
 
 // 尝试从 .env 文件读取配置
 function loadEnvConfig() {
@@ -32,12 +34,27 @@ function loadEnvConfig() {
     const envContent = fs.readFileSync(ENV_PATH, 'utf-8');
     const lines = envContent.split('\n');
     for (const line of lines) {
-      const match = line.match(/^FEISHU_WEBHOOK_URL=(.*)$/);
-      if (match) {
-        FEISHU_WEBHOOK_URL = match[1].trim();
+      const webhookMatch = line.match(/^FEISHU_WEBHOOK_URL=(.*)$/);
+      const signMatch = line.match(/^FEISHU_SIGN_KEY=(.*)$/);
+      if (webhookMatch) {
+        FEISHU_WEBHOOK_URL = webhookMatch[1].trim();
+      }
+      if (signMatch) {
+        FEISHU_SIGN_KEY = signMatch[1].trim();
       }
     }
   }
+}
+
+// 生成 Feishu 签名
+function generateSign(timestamp, signKey) {
+  // Feishu 签名机制：timestamp + "\n" + secret 进行 HMAC-SHA256，然后 base64 编码
+  // 参考：https://open.feishu.cn/document/ukTMukTMukTM/ucTM5YjL3ETO24yNxkjN#e1cdee3f
+  const stringToSign = timestamp + '\n' + signKey;
+  const hmac = crypto.createHmac('sha256', signKey);
+  hmac.update(stringToSign, 'utf8');
+  const signature = hmac.digest('base64');
+  return signature;
 }
 
 // 确保目录存在
@@ -82,49 +99,49 @@ function sendFeishuNotification(message) {
     }
 
     const url = new URL(FEISHU_WEBHOOK_URL);
+    
+    // 使用 text 消息类型（更兼容）
+    // 必须包含关键词 "Agent Tracker" 才能通过 Feishu 机器人校验
+    const content = [
+      '🤖 Agent Tracker 任务通知',
+      '',
+      `任务：${message.description}`,
+      `Agent: ${message.agent}`,
+      `状态：${message.statusEmoji} ${message.status}`,
+      message.duration ? `耗时：${message.duration}` : '',
+      message.githubUrl ? `GitHub: ${message.githubUrl}` : '',
+    ].filter(line => line).join('\n');
+    
     const data = JSON.stringify({
-      msg_type: 'interactive',
-      card: {
-        header: {
-          title: {
-            tag: 'plain_text',
-            content: '📊 Agent 任务通知'
-          },
-          template: message.status === 'completed' ? 'green' : (message.status === 'failed' ? 'red' : 'blue')
-        },
-        elements: [
-          {
-            tag: 'div',
-            text: {
-              tag: 'lark_md',
-              content: `**任务**: ${message.description}\n**Agent**: ${message.agent}\n**状态**: ${message.statusEmoji} ${message.status}\n${message.duration ? `**耗时**: ${message.duration}` : ''}`
-            }
-          },
-          ...(message.githubUrl ? [{
-            tag: 'action',
-            actions: [{
-              tag: 'button',
-              text: {
-                tag: 'plain_text',
-                content: '🔗 查看 GitHub'
-              },
-              url: message.githubUrl,
-              type: 'primary'
-            }]
-          }] : [])
-        ]
+      msg_type: 'text',
+      content: {
+        text: content
       }
     });
+
+    // 生成签名和时间戳
+    const timestamp = Date.now().toString();
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data)
+    };
+
+    // 如果配置了签名密钥，添加签名
+    if (FEISHU_SIGN_KEY) {
+      const sign = generateSign(timestamp, FEISHU_SIGN_KEY);
+      headers['X-Lark-Signature'] = sign;
+      headers['X-Lark-Timestamp'] = timestamp;
+      console.log('🔐 使用签名校验');
+      console.log('   Timestamp:', timestamp);
+      console.log('   Signature:', sign.substring(0, 20) + '...');
+    }
 
     const options = {
       hostname: url.hostname,
       port: 443,
       path: url.pathname + url.search,
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': data.length
-      }
+      headers: headers
     };
 
     const req = https.request(options, (res) => {
@@ -134,10 +151,16 @@ function sendFeishuNotification(message) {
       });
       res.on('end', () => {
         if (res.statusCode === 200) {
-          console.log('✅ Feishu 通知已发送');
-          resolve(true);
+          const result = JSON.parse(responseData);
+          if (result.StatusCode === 0 || result.code === 0) {
+            console.log('✅ Feishu 通知已发送');
+            resolve(true);
+          } else {
+            console.log(`❌ Feishu 通知失败：${JSON.stringify(result)}`);
+            resolve(false);
+          }
         } else {
-          console.log(`❌ Feishu 通知失败：${res.statusCode}`);
+          console.log(`❌ Feishu 通知失败：${res.statusCode} - ${responseData}`);
           resolve(false);
         }
       });
