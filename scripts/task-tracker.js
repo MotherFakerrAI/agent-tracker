@@ -17,9 +17,28 @@
 
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 // 配置文件路径
 const TASK_LOG_PATH = path.join(__dirname, '..', 'memory', 'task-log.json');
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+// Feishu 配置
+let FEISHU_WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
+
+// 尝试从 .env 文件读取配置
+function loadEnvConfig() {
+  if (fs.existsSync(ENV_PATH)) {
+    const envContent = fs.readFileSync(ENV_PATH, 'utf-8');
+    const lines = envContent.split('\n');
+    for (const line of lines) {
+      const match = line.match(/^FEISHU_WEBHOOK_URL=(.*)$/);
+      if (match) {
+        FEISHU_WEBHOOK_URL = match[1].trim();
+      }
+    }
+  }
+}
 
 // 确保目录存在
 function ensureDir(filePath) {
@@ -51,6 +70,87 @@ function writeTaskLog(data) {
   ensureDir(TASK_LOG_PATH);
   data.lastUpdated = new Date().toISOString();
   fs.writeFileSync(TASK_LOG_PATH, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+// 发送 Feishu 通知
+function sendFeishuNotification(message) {
+  return new Promise((resolve, reject) => {
+    if (!FEISHU_WEBHOOK_URL) {
+      console.log('⚠️  Feishu Webhook URL 未配置，跳过推送');
+      resolve(false);
+      return;
+    }
+
+    const url = new URL(FEISHU_WEBHOOK_URL);
+    const data = JSON.stringify({
+      msg_type: 'interactive',
+      card: {
+        header: {
+          title: {
+            tag: 'plain_text',
+            content: '📊 Agent 任务通知'
+          },
+          template: message.status === 'completed' ? 'green' : (message.status === 'failed' ? 'red' : 'blue')
+        },
+        elements: [
+          {
+            tag: 'div',
+            text: {
+              tag: 'lark_md',
+              content: `**任务**: ${message.description}\n**Agent**: ${message.agent}\n**状态**: ${message.statusEmoji} ${message.status}\n${message.duration ? `**耗时**: ${message.duration}` : ''}`
+            }
+          },
+          ...(message.githubUrl ? [{
+            tag: 'action',
+            actions: [{
+              tag: 'button',
+              text: {
+                tag: 'plain_text',
+                content: '🔗 查看 GitHub'
+              },
+              url: message.githubUrl,
+              type: 'primary'
+            }]
+          }] : [])
+        ]
+      }
+    });
+
+    const options = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname + url.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': data.length
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let responseData = '';
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          console.log('✅ Feishu 通知已发送');
+          resolve(true);
+        } else {
+          console.log(`❌ Feishu 通知失败：${res.statusCode}`);
+          resolve(false);
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.log(`❌ Feishu 通知错误：${error.message}`);
+      reject(error);
+    });
+
+    req.write(data);
+    req.end();
+  });
 }
 
 // 生成任务 ID
@@ -117,7 +217,7 @@ function getTaskStatus(taskId) {
 }
 
 // 更新任务状态
-function updateTaskStatus(taskId, status) {
+async function updateTaskStatus(taskId, status, options = {}) {
   const log = readTaskLog();
   
   const task = log.tasks.find(t => t.id === taskId);
@@ -133,6 +233,7 @@ function updateTaskStatus(taskId, status) {
     return null;
   }
   
+  const oldStatus = task.status;
   task.status = status;
   if (status === 'completed' || status === 'failed') {
     task.completedAt = new Date().toISOString();
@@ -142,6 +243,34 @@ function updateTaskStatus(taskId, status) {
   
   console.log(`✅ 任务状态已更新：${taskId}`);
   console.log(`   新状态：${status}`);
+  
+  // 如果状态变更且配置了 Feishu，发送通知
+  if (options.notify !== false && (status === 'completed' || status === 'failed')) {
+    loadEnvConfig();
+    
+    const statusEmoji = {
+      completed: '✅',
+      failed: '❌',
+    };
+    
+    // 计算耗时
+    let duration = null;
+    if (task.completedAt && task.assignedAt) {
+      const durationMs = new Date(task.completedAt) - new Date(task.assignedAt);
+      const minutes = Math.floor(durationMs / 60000);
+      const seconds = Math.floor((durationMs % 60000) / 1000);
+      duration = `${minutes}m ${seconds}s`;
+    }
+    
+    await sendFeishuNotification({
+      description: task.description,
+      agent: task.assignedTo,
+      status: status,
+      statusEmoji: statusEmoji[status] || status,
+      duration: duration,
+      githubUrl: options.githubUrl || null,
+    });
+  }
   
   return task;
 }
@@ -244,13 +373,22 @@ function showHelp() {
   list      列出任务
   stats     显示 Agent 统计
 
+update 命令选项:
+  --notify true|false   是否发送 Feishu 通知 (默认：true)
+  --github-url URL      GitHub 仓库链接
+
 示例:
   node task-tracker.js log --agent brainstorm --desc "项目创意生成"
   node task-tracker.js status task-123
   node task-tracker.js update --id task-123 --status completed
+  node task-tracker.js update --id task-123 --status completed --notify true --github-url https://github.com/...
   node task-tracker.js list --limit 5
   node task-tracker.js list --status running
   node task-tracker.js stats
+
+Feishu 配置:
+  方法 1: 环境变量 FEISHU_WEBHOOK_URL
+  方法 2: 在 .env 文件中配置 FEISHU_WEBHOOK_URL=...
 `);
 }
 
@@ -271,7 +409,7 @@ function parseArgs(args) {
 }
 
 // 主函数
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   
   if (args.length === 0 || args[0] === 'help' || args[0] === '--help') {
@@ -307,7 +445,10 @@ function main() {
         console.log('示例：node task-tracker.js update --id task-123 --status completed');
         process.exit(1);
       }
-      updateTaskStatus(options.id, options.status);
+      await updateTaskStatus(options.id, options.status, {
+        notify: options.notify !== 'false',
+        githubUrl: options.githubUrl || null,
+      });
       break;
       
     case 'list':

@@ -85,16 +85,54 @@ node scripts/task-tracker.js update --id task-123 --status completed
 node scripts/task-tracker.js list --status running
 ```
 
-## Feishu 群查询
+## 📢 Feishu 推送通知
 
-可以在 Feishu 群里快速查询：
+任务状态变更时自动推送 Feishu 群聊！
+
+### 配置 Webhook
+
+1. **复制示例配置**
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **获取 Feishu Webhook URL**
+   - 在 Feishu 群聊中添加「自定义机器人」
+   - 复制 Webhook 地址
+   - 粘贴到 `.env` 文件中
+
+3. **编辑 .env 文件**
+   ```bash
+   FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+   ```
+
+### 自动通知
+
+完成任务时自动发送通知（默认开启）：
+
+```bash
+# 自动发送 Feishu 通知
+node scripts/task-tracker.js update --id task-123 --status completed
+
+# 关闭通知
+node scripts/task-tracker.js update --id task-123 --status completed --notify false
+
+# 带 GitHub 链接
+node scripts/task-tracker.js update --id task-123 --status completed --github-url https://github.com/...
+```
+
+### 通知卡片示例
 
 ```
-/agent-tracker list --status running
-/agent-tracker stats
-```
+📊 Agent 任务通知
 
-（需要配置 Feishu bot 集成）
+任务：开发键盘钢琴项目
+Agent: coder
+状态：✅ completed
+耗时：5m 32s
+
+[🔗 查看 GitHub]
+```
 
 ---
 

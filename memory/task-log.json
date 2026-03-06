@@ -1,6 +1,14 @@
 {
   "tasks": [
     {
+      "id": "task-mmewyemz-ol0jz",
+      "assignedTo": "coder",
+      "assignedAt": "2026-03-06T13:11:40.955Z",
+      "description": "Feishu 推送集成",
+      "status": "completed",
+      "completedAt": "2026-03-06T13:11:42.288Z"
+    },
+    {
       "id": "task-mmewdmge-bymly",
       "assignedTo": "coder",
       "assignedAt": "2026-03-06T12:55:31.310Z",
@@ -17,5 +25,5 @@
       "completedAt": "2026-03-06T12:55:33.060Z"
     }
   ],
-  "lastUpdated": "2026-03-06T12:55:33.061Z"
+  "lastUpdated": "2026-03-06T13:11:42.288Z"
 }
