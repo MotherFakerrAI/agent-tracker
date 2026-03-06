@@ -1,0 +1,21 @@
+{
+  "tasks": [
+    {
+      "id": "task-mmewdmge-bymly",
+      "assignedTo": "coder",
+      "assignedAt": "2026-03-06T12:55:31.310Z",
+      "description": "开发键盘钢琴项目",
+      "status": "running",
+      "completedAt": null
+    },
+    {
+      "id": "task-mmewdl8e-e3lx7",
+      "assignedTo": "brainstorm",
+      "assignedAt": "2026-03-06T12:55:29.726Z",
+      "description": "进度追踪工具开发",
+      "status": "completed",
+      "completedAt": "2026-03-06T12:55:33.060Z"
+    }
+  ],
+  "lastUpdated": "2026-03-06T12:55:33.061Z"
+}
